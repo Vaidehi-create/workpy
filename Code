@@ -1,0 +1,135 @@
+import requests
+import pandas as pd
+import streamlit as st
+import matplotlib.pyplot as plt
+import numpy as np
+from typing import Dict, Any
+from pyngrok import ngrok  # For exposing Streamlit app to the internet
+
+# Replace these API keys with your actual keys
+ALPHA_VANTAGE_API_KEY = "39PTPE6A2JCI16LD"
+FMP_API_KEY = "djmEBUAkrXl53rusAYMTa2wMwRCivvJt"
+
+ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
+FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
+
+
+# Fetch company overview from Alpha Vantage
+def get_alpha_vantage_overview(symbol: str) -> Dict[str, Any]:
+    params = {
+        "function": "OVERVIEW",
+        "symbol": symbol,
+        "apikey": ALPHA_VANTAGE_API_KEY
+    }
+    try:
+        response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params)
+        response.raise_for_status()
+        data = response.json()
+        if "Error Message" in data:
+            print(f"Alpha Vantage Error: {data['Error Message']}")
+            return {}
+        return data
+    except requests.RequestException as e:
+        print(f"Alpha Vantage Error fetching data: {e}")
+        return {}
+
+
+# Fetch financial ratios from Financial Modeling Prep
+def get_fmp_ratios(symbol: str) -> Dict[str, Any]:
+    try:
+        key_metrics_url = f"{FMP_BASE_URL}/ratios/{symbol}?apikey={FMP_API_KEY}"
+        key_metrics_response = requests.get(key_metrics_url)
+        key_metrics_response.raise_for_status()
+        key_metrics_data = key_metrics_response.json()
+        if not key_metrics_data:
+            print(f"No FMP data found for {symbol}")
+            return {}
+        metrics = key_metrics_data[0] if key_metrics_data else {}
+        return {
+            "Debt to Equity Ratio": metrics.get("debtEquityRatio", "N/A"),
+            "Current Ratio": metrics.get("currentRatio", "N/A"),
+            "Interest Coverage Ratio": metrics.get("interestCoverage", "N/A")
+        }
+    except requests.RequestException as e:
+        print(f"FMP Error fetching data: {e}")
+        return {}
+
+
+# Extract metrics from Alpha Vantage and Financial Modeling Prep
+def extract_key_metrics(symbol: str) -> Dict[str, Any]:
+    alpha_vantage_data = get_alpha_vantage_overview(symbol)
+    fmp_data = get_fmp_ratios(symbol)
+    if not alpha_vantage_data or not fmp_data:
+        print(f"Unable to fetch comprehensive data for {symbol}.")
+        return {}
+    metrics = {
+        "Ticker": symbol,
+        "P/E Ratio": alpha_vantage_data.get("PERatio", "N/A"),
+        "Price to Book Ratio": alpha_vantage_data.get("PriceToBookRatio", "N/A"),
+        "Debt to Equity Ratio": fmp_data.get("Debt to Equity Ratio", "N/A"),
+        "Current Ratio": fmp_data.get("Current Ratio", "N/A"),
+        "Interest Coverage Ratio": fmp_data.get("Interest Coverage Ratio", "N/A"),
+        "Market Capitalization": alpha_vantage_data.get("MarketCapitalization", "N/A"),
+        "Dividend Yield": alpha_vantage_data.get("DividendYield", "N/A")
+    }
+    return metrics
+
+
+# Main Streamlit application
+def main():
+    st.title("Stock Financial Metrics Dashboard")
+    input_file = "tickers.txt"  # Ensure this file exists with ticker symbols
+    try:
+        with open(input_file, "r") as file:
+            tickers = [line.strip().upper() for line in file if line.strip()]
+    except FileNotFoundError:
+        st.error(f"ERROR: The file '{input_file}' was not found.")
+        return
+
+    results = []
+    for symbol in tickers:
+        metrics = extract_key_metrics(symbol)
+        if metrics:
+            results.append(metrics)
+
+    df = pd.DataFrame(results)
+    st.write("### Extracted Financial Metrics")
+    st.dataframe(df)
+
+    # Convert columns to numeric where possible
+    for col in df.columns:
+        if col != "Ticker":
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Calculate mean of numerical columns
+    mean_values = df.mean(numeric_only=True)
+    st.write("### Mean Values of Numerical Metrics")
+    st.write(mean_values)
+
+    # Generate Gaussian distribution plots for each metric
+    st.write("### Gaussian Distribution Plots for Mean Values")
+
+    for metric in mean_values.index:
+        # Simulate a Gaussian distribution centered at the mean
+        mean = mean_values[metric]
+        std_dev = df[metric].std() if metric in df.columns else 1  # Use column's standard deviation if available
+        x = np.linspace(mean - 3 * std_dev, mean + 3 * std_dev, 500)
+        y = (1 / (std_dev * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - mean) / std_dev) ** 2)
+
+        # Plot the Gaussian curve
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.plot(x, y, color="blue", label=f"{metric}")
+        ax.fill_between(x, y, color="blue", alpha=0.2)
+        ax.set_title(f"Gaussian Distribution for {metric}", fontsize=14)
+        ax.set_xlabel("Value")
+        ax.set_ylabel("Probability Density")
+        ax.legend()
+        st.pyplot(fig)
+
+
+if __name__ == "__main__":
+    # Start the Streamlit app
+    public_url = ngrok.connect(port=8501)  # Expose app via ngrok
+    print(f"Streamlit app is running at {public_url}")  # Display the public URL
+    st.write(f"Streamlit app is running at {public_url}")
+    main()
